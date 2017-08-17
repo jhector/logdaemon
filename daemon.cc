@@ -62,36 +62,63 @@ void usage(const char* prog)
 }
 
 void consume(Set<std::string> &s, int client) {
+    int ret;
     char real_path[PATH_MAX];
-    char buf[1024];
+    char buf[4096];
     char log_buf[1024];
 
-    bzero(buf, sizeof(buf));
-    if (read(client, buf, sizeof(buf)) < 0)  {
-        close(client);
-        perror("read()");
-	return;
+    while (1) {
+        bzero(buf, sizeof(buf));
+        do {
+            ret = recv(client, buf, sizeof(buf), 0);
+        } while (ret < 0 && errno == EAGAIN);
+
+        if (ret < 0)  {
+            perror("recv()");
+            break;
+        }
+
+        if (ret == 0) {
+            break;
+        }
+
+	if (buf[ret-1] != '\n') {
+	    std::cerr << "Fragmented packet received: " << buf << std::endl;
+	}
+
+        char *buf_end = buf + ret;
+        char *iter = buf;
+        char *delim;
+        while ((delim = strchr(iter, '\n')) != NULL) {
+            char *pos = strchr(iter, ';');
+            if (!pos) {
+                std::cerr << "Unable to find ';' in " << iter << std::endl;
+                continue;
+            }
+
+            *pos = 0x0;
+            bzero(real_path, sizeof(real_path));
+            if (realpath(iter, &real_path[0]) == NULL) {
+                std::cerr << "Unable to resolve path: " << iter << std::endl;
+                continue;
+            }
+
+            *delim = 0x0;
+            bzero(log_buf, sizeof(log_buf));
+            snprintf(log_buf, sizeof(log_buf), "%s;%s", real_path, pos+1);
+
+            s.insert(log_buf);
+
+            // if our delimiter was found at the end, we are done
+	    if (delim == (buf_end-1)) {
+	        break;
+	    }
+
+	    iter = delim+1;
+	}
     }
 
     close(client);
-
-    char *pos = strchr(buf, ';');
-    if (!pos) {
-        std::cerr << "Unable to find ';'" << std::endl;
-        return;
-    }
-
-    *pos = 0x0;
-    bzero(real_path, sizeof(real_path));
-    if (realpath(buf, &real_path[0]) == NULL) {
-        std::cerr << "Unable to resolve path: " << buf << std::endl;
-	return;
-    }
-
-    bzero(log_buf, sizeof(log_buf));
-    snprintf(log_buf, sizeof(log_buf), "%s;%s", real_path, pos+1);
-
-    s.insert(log_buf);
 }
 
 int main(int argc, char *argv[])
